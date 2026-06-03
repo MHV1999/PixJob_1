@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "outDir": "dist",
+    "rootDir": "src",
+    "baseUrl": ".",
+    "paths": {
+      "@pixjob/shared-types": ["../../packages/shared-types/src"],
+      "@pixjob/shared-utils": ["../../packages/shared-utils/src"]
+    }
+  },
+  "include": ["src", "prisma/seed.ts"]
+}

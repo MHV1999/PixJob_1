@@ -1,0 +1,172 @@
+// PixJob — Prisma Schema
+// Sprint 1: Authentication & Identity
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  CLIENT
+  DESIGNER
+  MODERATOR
+  SUPPORT
+  FINANCE
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum UserStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  BANNED
+  DELETED
+}
+
+// ─── Users ────────────────────────────────────────────────────────────────────
+
+model User {
+  id        String     @id @default(uuid()) @db.Uuid
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+
+  email        String     @unique @db.VarChar(320)
+  username     String     @unique @db.VarChar(50)
+  password     String     // argon2 hash
+  firstName    String?    @map("first_name") @db.VarChar(100)
+  lastName     String?    @map("last_name") @db.VarChar(100)
+  status       UserStatus @default(PENDING)
+
+  // Relations
+  userRoles          UserRoleAssignment[]
+  sessions           Session[]
+  emailVerifications EmailVerification[]
+  auditLogs          AuditLog[]
+
+  @@map("users")
+}
+
+// ─── Roles & Permissions (RBAC) ───────────────────────────────────────────────
+
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  name        UserRole @unique
+  description String?  @db.VarChar(255)
+
+  // Relations
+  userRoles   UserRoleAssignment[]
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(uuid()) @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  action      String   @db.VarChar(100)  // e.g. "create", "read", "update", "delete"
+  subject     String   @db.VarChar(100)  // e.g. "Project", "Proposal", "User"
+  description String?  @db.VarChar(255)
+
+  // Relations
+  roles RolePermission[]
+
+  @@unique([action, subject])
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String   @id @default(uuid()) @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  roleId       String     @map("role_id") @db.Uuid
+  permissionId String     @map("permission_id") @db.Uuid
+
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserRoleAssignment {
+  id        String   @id @default(uuid()) @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  userId    String   @map("user_id") @db.Uuid
+  roleId    String   @map("role_id") @db.Uuid
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@map("user_roles")
+}
+
+// ─── Sessions ─────────────────────────────────────────────────────────────────
+
+model Session {
+  id           String    @id @default(uuid()) @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  userId       String    @map("user_id") @db.Uuid
+  refreshToken String    @unique @map("refresh_token")  // hashed
+  userAgent    String?   @map("user_agent") @db.VarChar(512)
+  ipAddress    String?   @map("ip_address") @db.VarChar(45)
+  expiresAt    DateTime  @map("expires_at")
+  revokedAt    DateTime? @map("revoked_at")
+
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+// ─── Email Verifications ──────────────────────────────────────────────────────
+
+model EmailVerification {
+  id        String    @id @default(uuid()) @db.Uuid
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  userId    String    @map("user_id") @db.Uuid
+  token     String    @unique @db.VarChar(128)  // hashed OTP / signed token
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("email_verifications")
+}
+
+// ─── Audit Log ────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  userId    String?  @map("user_id") @db.Uuid
+  action    String   @db.VarChar(100)   // e.g. "auth.register", "auth.login"
+  subject   String?  @db.VarChar(100)   // resource type
+  subjectId String?  @map("subject_id") @db.VarChar(36)
+  ipAddress String?  @map("ip_address") @db.VarChar(45)
+  userAgent String?  @map("user_agent") @db.VarChar(512)
+  metadata  Json?
+
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@map("audit_logs")
+}

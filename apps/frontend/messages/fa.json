@@ -1,0 +1,28 @@
+{
+  "common": {
+    "appName": "پیکسجاب",
+    "loading": "در حال بارگذاری…",
+    "error": "مشکلی پیش آمد",
+    "retry": "تلاش مجدد"
+  },
+  "auth": {
+    "login": "ورود",
+    "register": "ثبت‌نام",
+    "logout": "خروج",
+    "email": "ایمیل",
+    "emailOrUsername": "ایمیل یا نام کاربری",
+    "username": "نام کاربری",
+    "password": "رمز عبور",
+    "firstName": "نام",
+    "lastName": "نام خانوادگی",
+    "verifyEmail": "تأیید ایمیل",
+    "verificationToken": "کد تأیید",
+    "invalidCredentials": "ایمیل یا رمز عبور اشتباه است",
+    "emailAlreadyExists": "این ایمیل قبلاً ثبت شده",
+    "usernameAlreadyExists": "این نام کاربری قبلاً گرفته شده",
+    "registrationSuccess": "حساب ایجاد شد! لطفاً ایمیل خود را تأیید کنید.",
+    "emailVerifiedSuccess": "ایمیل با موفقیت تأیید شد.",
+    "noAccount": "حساب ندارید؟",
+    "alreadyHaveAccount": "قبلاً ثبت‌نام کرده‌اید؟"
+  }
+}

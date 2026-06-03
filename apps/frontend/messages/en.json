@@ -1,0 +1,28 @@
+{
+  "common": {
+    "appName": "PixJob",
+    "loading": "Loading…",
+    "error": "Something went wrong",
+    "retry": "Try again"
+  },
+  "auth": {
+    "login": "Sign in",
+    "register": "Create account",
+    "logout": "Sign out",
+    "email": "Email",
+    "emailOrUsername": "Email or username",
+    "username": "Username",
+    "password": "Password",
+    "firstName": "First name",
+    "lastName": "Last name",
+    "verifyEmail": "Verify email",
+    "verificationToken": "Verification token",
+    "invalidCredentials": "Invalid email or password",
+    "emailAlreadyExists": "Email already registered",
+    "usernameAlreadyExists": "Username already taken",
+    "registrationSuccess": "Account created! Please verify your email.",
+    "emailVerifiedSuccess": "Email verified successfully.",
+    "noAccount": "Don't have an account?",
+    "alreadyHaveAccount": "Already have an account?"
+  }
+}
