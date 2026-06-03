@@ -7,6 +7,7 @@ import {
   HttpCode,
   HttpStatus,
   UseGuards,
+  UnauthorizedException,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -14,6 +15,7 @@ import {
   ApiResponse,
   ApiBearerAuth,
   ApiCookieAuth,
+  ApiHeader,
 } from '@nestjs/swagger';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { Throttle } from '@nestjs/throttler';
@@ -31,14 +33,17 @@ import { JwtAuthGuard } from './infrastructure/guards/jwt-auth.guard';
 import { Public } from './infrastructure/decorators/public.decorator';
 import { CurrentUser } from './infrastructure/decorators/current-user.decorator';
 import type { RequestUser } from './infrastructure/strategies/jwt.strategy';
+import type { UserStatus, UserRole } from '@pixjob/shared-types';
 
 const REFRESH_COOKIE = 'pixjob_refresh';
+
 const COOKIE_OPTIONS = {
   httpOnly: true,
-  secure: process.env['NODE_ENV'] === 'production',
+  // Secure flag: HTTPS-only in production/staging; relaxed in local development
+  secure: process.env['NODE_ENV'] === 'production' || process.env['NODE_ENV'] === 'staging',
   sameSite: 'lax' as const,
   path: '/api/v1/auth',
-  maxAge: 7 * 24 * 60 * 60 * 1000,
+  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in ms
 };
 
 @ApiTags('auth')
@@ -58,8 +63,15 @@ export class AuthController {
   @Post('register')
   @Throttle({ short: { limit: 3, ttl: 60000 } })
   @ApiOperation({ summary: 'Register a new user account' })
-  @ApiResponse({ status: 201, description: 'User created. Verification email sent.' })
+  @ApiResponse({ status: 201, description: 'User created. Verification email will be sent.' })
   @ApiResponse({ status: 409, description: 'Email or username already taken' })
+  @ApiHeader({
+    name: 'X-Dev-Verification-Token',
+    description:
+      '[DEVELOPMENT ONLY] Full verification token (userId + OTP). ' +
+      'Never present in staging or production environments.',
+    required: false,
+  })
   async register(
     @Body() dto: RegisterDto,
     @Req() req: FastifyRequest,
@@ -70,10 +82,23 @@ export class AuthController {
       userAgent: req.headers['user-agent'],
     });
 
-    // In production this token would be emailed. For development, return it.
-    if (process.env['NODE_ENV'] !== 'production') {
+    // ── FIX 2: Verification token exposure ──────────────────────────────────
+    // Security: The raw verification token is ONLY returned in the response
+    // header when NODE_ENV=development. In staging and production the token
+    // is delivered exclusively via email (or an email service integration).
+    //
+    // This check uses an explicit allowlist rather than a "not production"
+    // check, so that any unrecognised environment (e.g. "test", "staging")
+    // defaults to the secure behaviour.
+    const isDevelopment = process.env['NODE_ENV'] === 'development';
+
+    if (isDevelopment) {
+      // Token format: userId(36) + rawOtp(32) — matches VerifyEmailUseCase.execute()
       void res.header('X-Dev-Verification-Token', user.id + verificationToken);
     }
+    // Production / staging: token is NOT included in any response field or header.
+    // It must be delivered out-of-band (email). Logging the token server-side is
+    // also forbidden to prevent it appearing in log aggregation systems.
 
     return { message: 'Registration successful. Please verify your email.', userId: user.id };
   }
@@ -86,6 +111,7 @@ export class AuthController {
   @ApiOperation({ summary: 'Login with email/username and password' })
   @ApiResponse({ status: 200, type: AuthResponseDto })
   @ApiResponse({ status: 401, description: 'Invalid credentials' })
+  @ApiResponse({ status: 403, description: 'Account suspended, banned or pending verification' })
   async login(
     @Body() dto: LoginDto,
     @Req() req: FastifyRequest,
@@ -96,6 +122,8 @@ export class AuthController {
       userAgent: req.headers['user-agent'],
     });
 
+    // Refresh token is set as HttpOnly cookie AND returned in body.
+    // Clients that cannot read cookies (mobile, Postman) use the body value.
     void res.setCookie(REFRESH_COOKIE, tokens.refreshToken, COOKIE_OPTIONS);
 
     return {
@@ -110,19 +138,20 @@ export class AuthController {
   @Public()
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Rotate refresh token and get new access token' })
   @ApiCookieAuth()
-  @ApiResponse({ status: 200, description: 'New token pair returned' })
-  @ApiResponse({ status: 401, description: 'Invalid or expired refresh token' })
+  @ApiOperation({ summary: 'Rotate refresh token and get new access token' })
+  @ApiResponse({ status: 200, description: 'New token pair issued' })
+  @ApiResponse({ status: 401, description: 'Invalid, expired or already-used refresh token' })
   async refresh(
     @Req() req: FastifyRequest,
     @Res({ passthrough: true }) res: FastifyReply,
   ): Promise<{ accessToken: string; expiresIn: number }> {
+    // Prefer HttpOnly cookie; fall back to JSON body for non-browser clients
     const tokenFromCookie = (req.cookies as Record<string, string>)?.[REFRESH_COOKIE];
     const rawToken = tokenFromCookie ?? (req.body as { refreshToken?: string })?.refreshToken;
 
     if (!rawToken) {
-      throw new (await import('@nestjs/common')).UnauthorizedException('No refresh token provided');
+      throw new UnauthorizedException('No refresh token provided');
     }
 
     const tokens = await this.refreshUseCase.execute(rawToken, {
@@ -130,6 +159,7 @@ export class AuthController {
       userAgent: req.headers['user-agent'],
     });
 
+    // Rotate the cookie with the new refresh token
     void res.setCookie(REFRESH_COOKIE, tokens.refreshToken, COOKIE_OPTIONS);
 
     return { accessToken: tokens.accessToken, expiresIn: tokens.expiresIn };
@@ -139,17 +169,18 @@ export class AuthController {
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Revoke current session' })
+  @ApiOperation({ summary: 'Revoke current session and clear refresh token cookie' })
   @ApiResponse({ status: 204, description: 'Logged out successfully' })
   async logout(
-    @CurrentUser() user: RequestUser,
+    @CurrentUser() currentUser: RequestUser,
     @Req() req: FastifyRequest,
     @Res({ passthrough: true }) res: FastifyReply,
   ): Promise<void> {
     const tokenFromCookie = (req.cookies as Record<string, string>)?.[REFRESH_COOKIE];
-    const rawToken = tokenFromCookie ?? (req.body as { refreshToken?: string })?.refreshToken ?? '';
+    const rawToken =
+      tokenFromCookie ?? (req.body as { refreshToken?: string })?.refreshToken ?? '';
 
-    await this.logoutUseCase.execute(rawToken, user.id, {
+    await this.logoutUseCase.execute(rawToken, currentUser.id, {
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'],
     });
@@ -162,8 +193,8 @@ export class AuthController {
   @Post('verify-email')
   @HttpCode(HttpStatus.OK)
   @Throttle({ short: { limit: 5, ttl: 300000 } })
-  @ApiOperation({ summary: 'Verify email address with token' })
-  @ApiResponse({ status: 200, description: 'Email verified successfully' })
+  @ApiOperation({ summary: 'Verify email address using the token sent by email' })
+  @ApiResponse({ status: 200, description: 'Email verified. Account is now ACTIVE.' })
   @ApiResponse({ status: 400, description: 'Invalid or expired token' })
   async verifyEmail(
     @Body() dto: VerifyEmailDto,
@@ -183,8 +214,8 @@ export class AuthController {
     username: string;
     firstName: string | null;
     lastName: string | null;
-    status: import('@pixjob/shared-types').UserStatus;
-    roles: import('@pixjob/shared-types').UserRole[];
+    status: UserStatus;
+    roles: UserRole[];
     createdAt?: Date;
   }): UserResponseDto {
     const dto = new UserResponseDto();
