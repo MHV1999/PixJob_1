@@ -1,5 +1,5 @@
 // PixJob — Prisma Schema
-// Sprint 1: Authentication & Identity
+// Sprint 1 (Security Review): Authentication & Identity
 
 generator client {
   provider = "prisma-client-js"
@@ -23,11 +23,11 @@ enum UserRole {
 }
 
 enum UserStatus {
-  PENDING
-  ACTIVE
-  SUSPENDED
-  BANNED
-  DELETED
+  PENDING    // Registered but email not yet verified
+  ACTIVE     // Fully verified and able to use the platform
+  SUSPENDED  // Temporarily restricted by a moderator/admin
+  BANNED     // Permanently restricted
+  DELETED    // Soft-deleted; treated as non-existent in auth flows
 }
 
 // ─── Users ────────────────────────────────────────────────────────────────────
@@ -37,12 +37,12 @@ model User {
   createdAt DateTime   @default(now()) @map("created_at")
   updatedAt DateTime   @updatedAt @map("updated_at")
 
-  email        String     @unique @db.VarChar(320)
-  username     String     @unique @db.VarChar(50)
-  password     String     // argon2 hash
-  firstName    String?    @map("first_name") @db.VarChar(100)
-  lastName     String?    @map("last_name") @db.VarChar(100)
-  status       UserStatus @default(PENDING)
+  email     String     @unique @db.VarChar(320)
+  username  String     @unique @db.VarChar(50)
+  password  String     // argon2id hash — NEVER plain text
+  firstName String?    @map("first_name") @db.VarChar(100)
+  lastName  String?    @map("last_name") @db.VarChar(100)
+  status    UserStatus @default(PENDING)
 
   // Relations
   userRoles          UserRoleAssignment[]
@@ -63,7 +63,6 @@ model Role {
   name        UserRole @unique
   description String?  @db.VarChar(255)
 
-  // Relations
   userRoles   UserRoleAssignment[]
   permissions RolePermission[]
 
@@ -74,11 +73,11 @@ model Permission {
   id          String   @id @default(uuid()) @db.Uuid
   createdAt   DateTime @default(now()) @map("created_at")
 
-  action      String   @db.VarChar(100)  // e.g. "create", "read", "update", "delete"
-  subject     String   @db.VarChar(100)  // e.g. "Project", "Proposal", "User"
+  // Permission key format: "<resource>.<action>", e.g. "users.read", "roles.write"
+  action      String   @db.VarChar(100)
+  subject     String   @db.VarChar(100)
   description String?  @db.VarChar(255)
 
-  // Relations
   roles RolePermission[]
 
   @@unique([action, subject])
@@ -121,7 +120,10 @@ model Session {
   updatedAt    DateTime  @updatedAt @map("updated_at")
 
   userId       String    @map("user_id") @db.Uuid
-  refreshToken String    @unique @map("refresh_token")  // hashed
+  // SECURITY: Only the argon2id hash of the refresh token is stored here.
+  // The raw token is issued to the client and never persisted.
+  // A database compromise will NOT expose any valid refresh tokens.
+  refreshToken String    @unique @map("refresh_token") @db.VarChar(512)
   userAgent    String?   @map("user_agent") @db.VarChar(512)
   ipAddress    String?   @map("ip_address") @db.VarChar(45)
   expiresAt    DateTime  @map("expires_at")
@@ -130,6 +132,7 @@ model Session {
   user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([userId, revokedAt]) // speeds up findActiveSessionsForUser
   @@map("sessions")
 }
 
@@ -140,7 +143,8 @@ model EmailVerification {
   createdAt DateTime  @default(now()) @map("created_at")
 
   userId    String    @map("user_id") @db.Uuid
-  token     String    @unique @db.VarChar(128)  // hashed OTP / signed token
+  // SECURITY: Only the argon2id hash of the OTP is stored.
+  token     String    @unique @db.VarChar(512)
   expiresAt DateTime  @map("expires_at")
   usedAt    DateTime? @map("used_at")
 
@@ -157,16 +161,21 @@ model AuditLog {
   createdAt DateTime @default(now()) @map("created_at")
 
   userId    String?  @map("user_id") @db.Uuid
-  action    String   @db.VarChar(100)   // e.g. "auth.register", "auth.login"
-  subject   String?  @db.VarChar(100)   // resource type
-  subjectId String?  @map("subject_id") @db.VarChar(36)
+  // Structured action name, e.g. "auth.register", "auth.login.failed"
+  action    String   @db.VarChar(100)
+  // entityType: resource type acted upon, e.g. "User", "Session"
+  subject   String?  @map("entity_type") @db.VarChar(100)
+  // entityId: UUID or identifier of the specific resource
+  subjectId String?  @map("entity_id") @db.VarChar(36)
   ipAddress String?  @map("ip_address") @db.VarChar(45)
   userAgent String?  @map("user_agent") @db.VarChar(512)
+  // Arbitrary structured metadata (JSON) — e.g. failure reason, changed fields
   metadata  Json?
 
   user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([action])
+  @@index([createdAt]) // enables time-range queries for compliance reports
   @@map("audit_logs")
 }

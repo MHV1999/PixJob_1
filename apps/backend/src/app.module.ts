@@ -10,34 +10,42 @@ import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { JwtAuthGuard } from './modules/auth/infrastructure/guards/jwt-auth.guard';
 import { RolesGuard } from './modules/auth/infrastructure/guards/roles.guard';
+import { PermissionsGuard } from './modules/auth/infrastructure/guards/permissions.guard';
 
 @Module({
   imports: [
+    // ── Configuration ─────────────────────────────────────────────────────────
     ConfigModule.forRoot({
       isGlobal: true,
       load: [appConfig],
       envFilePath: ['.env.local', '.env'],
     }),
 
+    // ── Rate limiting (global) ────────────────────────────────────────────────
     ThrottlerModule.forRoot([
-      { name: 'short', ttl: 1000, limit: 10 },
-      { name: 'medium', ttl: 10000, limit: 50 },
-      { name: 'long', ttl: 60000, limit: 200 },
+      { name: 'short',  ttl: 1000,   limit: 10  },
+      { name: 'medium', ttl: 10000,  limit: 50  },
+      { name: 'long',   ttl: 60000,  limit: 200 },
     ]),
 
+    // ── Infrastructure ────────────────────────────────────────────────────────
     DatabaseModule,
     RedisModule,
-    HealthModule,
 
-    // Sprint 1
+    // ── Feature modules ───────────────────────────────────────────────────────
+    HealthModule,
     AuthModule,
     UsersModule,
   ],
   providers: [
-    // Apply JWT guard globally — use @Public() to opt out
+    // Global guard execution order: JwtAuthGuard → RolesGuard → PermissionsGuard
+    //
+    // JwtAuthGuard:    validates JWT signature + live user status (FIX 3)
+    // RolesGuard:      coarse role-based access control via @Roles(...)
+    // PermissionsGuard: fine-grained permission checks via @RequirePermissions(...) (FIX 5)
     { provide: APP_GUARD, useClass: JwtAuthGuard },
-    // Apply RBAC guard globally — use @Roles() to require specific roles
     { provide: APP_GUARD, useClass: RolesGuard },
+    { provide: APP_GUARD, useClass: PermissionsGuard },
   ],
 })
 export class AppModule {}

@@ -30,10 +30,18 @@ export class UsersController {
     private readonly userRepo: IUserRepository,
   ) {}
 
+  /**
+   * GET /api/v1/users/me
+   *
+   * Returns the current user's profile.
+   * FIX 3: JwtAuthGuard performs a live DB status check before this executes,
+   * so only ACTIVE users will ever reach this handler.
+   */
   @Get('me')
   @ApiOperation({ summary: 'Get current authenticated user profile' })
   @ApiResponse({ status: 200, type: UserResponseDto })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 401, description: 'Unauthorized or email not verified' })
+  @ApiResponse({ status: 403, description: 'Account suspended or banned' })
   async getMe(@CurrentUser() currentUser: RequestUser): Promise<UserResponseDto> {
     const user = await this.userRepo.findById(currentUser.id);
     if (!user) throw new NotFoundException('User not found');
